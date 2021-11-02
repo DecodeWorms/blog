@@ -28,8 +28,6 @@ func init() {
 	username := os.Getenv("DATABASE_USERNAME")
 	port := os.Getenv("DATABASE_PORT")
 	dbName := os.Getenv("DATABASE_NAME")
-	//redisPort := os.Getenv("REDIS_PORT")
-
 	var db *gorm.DB
 
 	cfg := config.Config{
@@ -50,10 +48,9 @@ func main() {
 	p := handlers.NewPostHandler(post)
 	c := handlers.NewCommentHandler(comment)
 	router := mux.NewRouter()
-	router.HandleFunc("/user/table", u.Table).Methods("POST")
 	router.HandleFunc("/user/create", u.Create).Methods("POST")
 	router.HandleFunc("/user/login", u.Login).Methods("GET")
-	router.HandleFunc("/user/details/{username}", u.Details).Methods("GET")
+	router.HandleFunc("/user/details/{username}", u.Profiles).Methods("GET")
 
 	router.HandleFunc("/post/table", p.Table).Methods("POST")
 
