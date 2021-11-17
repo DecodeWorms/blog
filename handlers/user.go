@@ -77,12 +77,19 @@ func (u UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode("Unable to create token string")
 	}
 	TokenString = res.AccessToken
+	//This http.SetCookie is not working and cookie is not set at the client(browser)
+	http.SetCookie(w, &http.Cookie{
+		Name:    "token",
+		Value:   res.AccessToken,
+		Expires: res.AtExp,
+	})
 	json.NewEncoder(w).Encode(TokenString)
 }
 
 func (u UserHandler) MyProfiles(w http.ResponseWriter, r *http.Request) {
 	util.SetHeader(w)
 	var err error
+
 	var claims *types.Claim
 	claims, err = verifyToken(w, r)
 	if err != nil {
@@ -237,7 +244,11 @@ func createToken(username string, userId uint, w http.ResponseWriter) (*types.To
 }
 
 func verifyToken(w http.ResponseWriter, r *http.Request) (*types.Claim, error) {
-	tknString := TokenString
+	c, err := r.Cookie("token") //this code is not generating a token stored in the cookie
+	tk := c.Value               //nil,so it creates a panic
+	fmt.Println(tk)
+
+	tknString := TokenString //token generatd is store here to proceed with authentication
 
 	clm := &types.Claim{}
 
