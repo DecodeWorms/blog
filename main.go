@@ -41,6 +41,7 @@ func init() {
 	user = storage.NewUser(c)
 	post = storage.NewPost(c)
 	comment = storage.NewComment(c)
+
 }
 func main() {
 
@@ -49,8 +50,15 @@ func main() {
 	c := handlers.NewCommentHandler(comment)
 	router := mux.NewRouter()
 	router.HandleFunc("/user/create", u.Create).Methods("POST")
-	router.HandleFunc("/user/login", u.Login).Methods("GET")
-	router.HandleFunc("/user/details/{username}", u.Profiles).Methods("GET")
+	router.HandleFunc("/user/auto", u.AutoMigrate).Methods("POST")
+	router.HandleFunc("/user/login", u.Login).Methods("POST")
+	router.HandleFunc("/user/myprofile", u.MyProfiles).Methods("GET")
+	router.HandleFunc("/user/posts", u.Posts).Methods("GET")
+	router.HandleFunc("/user/update", u.UpdateName).Methods("PUT")
+	router.HandleFunc("/user/posts", u.Post).Methods("POST")
+	router.HandleFunc("/user/comment", u.Comment).Methods("POST")
+	router.HandleFunc("/user/logout", u.LogOut).Methods("POST")
+	// router.HandleFunc("/user/logout", u.LogOut).Methods("POST")
 
 	router.HandleFunc("/post/table", p.Table).Methods("POST")
 

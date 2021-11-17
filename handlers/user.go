@@ -5,18 +5,12 @@ import (
 	"blog/types"
 	"blog/util"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
-	"github.com/go-redis/redis"
-	"github.com/gorilla/mux"
-	"github.com/twinj/uuid"
 )
 
 type UserHandler struct {
@@ -30,6 +24,19 @@ func NewUserHandler(use storage.User) UserHandler {
 
 }
 
+var TokenString string
+var newToken string
+
+func (u UserHandler) AutoMigrate(w http.ResponseWriter, r *http.Request) {
+	var err error
+	var data types.User
+	err = u.user.Automigrate(data)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to create users table")
+	}
+	json.NewEncoder(w).Encode("Users table created successfully...")
+}
+
 func (u UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	util.SetHeader(w)
 	var data types.User
@@ -41,6 +48,7 @@ func (u UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode("Fectching json results..")
 	err = u.user.Create(data)
+	json.NewEncoder(w).Encode("User Created")
 
 }
 
@@ -52,6 +60,7 @@ func (u UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 	err = json.NewDecoder(r.Body).Decode(&data)
 	if err != nil {
 		json.NewEncoder(w).Encode("Unable to decode json")
+		return
 	}
 	json.NewEncoder(w).Encode("Decoding json..")
 
@@ -61,84 +70,165 @@ func (u UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode("username or password incorrect")
 		return
 	}
-	json.NewEncoder(w).Encode("Correct username and password")
 
-	var tokenDetails *types.TokenDetails
-	tokenDetails, err = CreateToken(uint64(data.ID), r)
+	res := &types.TokenDetails{}
+	res, err = createToken(data.Username, data.ID, w)
 	if err != nil {
-		json.NewEncoder(w).Encode("Unable to create token")
+		json.NewEncoder(w).Encode("Unable to create token string")
 	}
-	json.NewEncoder(w).Encode("Token")
-	json.NewEncoder(w).Encode(tokenDetails)
-
-	err = saveToken(uint64(data.ID), tokenDetails)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to save token")
-	}
-	json.NewEncoder(w).Encode("Token saved successfully")
-
-	tokens := map[string]string{
-		"access_token":  tokenDetails.AccessToken,
-		"refresh_token": tokenDetails.RefreshToken,
-	}
-	json.NewEncoder(w).Encode(tokens)
-	// return
-
+	TokenString = res.AccessToken
+	json.NewEncoder(w).Encode(TokenString)
 }
 
-func (u UserHandler) Profiles(w http.ResponseWriter, r *http.Request) {
+func (u UserHandler) MyProfiles(w http.ResponseWriter, r *http.Request) {
 	util.SetHeader(w)
 	var err error
-	params := mux.Vars(r)
-	username := params["username"]
-	var data types.User
-	data, err = u.user.Profiles(username)
+	var claims *types.Claim
+	claims, err = verifyToken(w, r)
 	if err != nil {
-		json.NewEncoder(w).Encode("Unable to fetch user profiles")
-	}
-	json.NewEncoder(w).Encode(data)
-	var result *jwt.Token
-	result, err = VerifyToken(r)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to get parsed token")
+		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
 		return
 	}
-	json.NewEncoder(w).Encode("Verified token")
-	json.NewEncoder(w).Encode(result)
+	w.Write([]byte(fmt.Sprintf("Welcome %s!", claims.Username)))
+	var data []types.User
+	data, err = u.user.MyProfiles(claims.Username)
+	json.NewEncoder(w).Encode(data)
 
 }
 
-func CreateToken(userId uint64, r *http.Request) (*types.TokenDetails, error) {
+func (u UserHandler) Posts(w http.ResponseWriter, r *http.Request) {
+	util.SetHeader(w)
 	var err error
+	var data []types.Post
+	var claims *types.Claim
+	claims, err = verifyToken(w, r)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
+		return
+	}
+	w.Write([]byte(fmt.Sprintf("Welcome %s!", claims.Username)))
+	data, err = u.user.Posts()
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to load posts")
+	}
+	json.NewEncoder(w).Encode(data)
 
+}
+
+func (u UserHandler) UpdateName(w http.ResponseWriter, r *http.Request) {
+	util.SetHeader(w)
+	var err error
+	var data types.User
+	err = json.NewDecoder(r.Body).Decode(&data)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to marshal json")
+		return
+	}
+	var clm *types.Claim
+	clm, err = verifyToken(w, r)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
+		return
+	}
+	w.Write([]byte(fmt.Sprintf("Welcome %s!", clm.Username)))
+	err = u.user.UpdateName(clm.Username, data)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to update user profile")
+		return
+	}
+	json.NewEncoder(w).Encode("Username Changed successfully")
+
+}
+
+func (u UserHandler) Post(w http.ResponseWriter, r *http.Request) {
+	var err error
+	var clm *types.Claim
+	clm, err = verifyToken(w, r)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
+		return
+	}
+	w.Write([]byte(fmt.Sprintf("Welcome %s!", clm.Username)))
+	fmt.Println(clm.UserId)
+
+	var data types.Post
+	err = json.NewDecoder(r.Body).Decode(&data)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to unmarshal json or empty input")
+	}
+
+	err = u.user.Post(uint64(clm.UserId), data)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to create post..")
+	}
+	json.NewEncoder(w).Encode("Post created successfully..")
+
+}
+
+func (u UserHandler) Comment(w http.ResponseWriter, r *http.Request) {
+	util.SetHeader(w)
+	var err error
+	var clm *types.Claim
+	clm, err = verifyToken(w, r)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
+		return
+	}
+	w.Write([]byte(fmt.Sprintf("Welcome %s!", clm.Username)))
+
+	var data types.Comment
+	err = json.NewDecoder(r.Body).Decode(&data)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to unmarshal json...")
+	}
+
+	err = u.user.Coment(clm.Username, data)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to save ur comment")
+	}
+	json.NewEncoder(w).Encode("Comment saved successfully..")
+
+}
+
+func (u UserHandler) LogOut(w http.ResponseWriter, r *http.Request) {
+	util.SetHeader(w)
+	TokenString = "deleted"
+	json.NewEncoder(w).Encode("You are logged out..see u next time")
+
+}
+
+func createToken(username string, userId uint, w http.ResponseWriter) (*types.TokenDetails, error) {
 	td := &types.TokenDetails{}
-	td.AccessUuid = uuid.NewV4().String()
-	//td.UserId = userId
-	td.AtExp = time.Now().Add(time.Minute * 15).Unix()
+	td.AtExp = time.Now().Add(time.Minute * 15)
 
-	atClaims := jwt.MapClaims{}
-	atClaims["authorization"] = true
-	atClaims["access_uuid"] = td.AccessUuid
-	atClaims["user_id"] = userId
-	atClaims["exp"] = td.AtExp
+	td.RtExp = time.Now().Add(time.Hour * 24 * 7).Unix()
 
+	var err error
+	//Creating Access Token
+	atClaims := &types.Claim{
+		Username: username,
+		UserId:   userId,
+		StandardClaims: jwt.StandardClaims{
+			// In JWT, the expiry time is expressed as unix milliseconds
+			ExpiresAt: td.AtExp.Unix(),
+		},
+	}
 	at := jwt.NewWithClaims(jwt.SigningMethodHS256, atClaims)
 	td.AccessToken, err = at.SignedString([]byte(os.Getenv("ACCESS_SECRET")))
-
 	if err != nil {
 		return nil, err
 	}
-
-	td.RefreshUuid = uuid.NewV4().String()
-	td.RtExp = time.Now().Add(time.Hour * 24 * 7).Unix()
-
-	rfClaims := jwt.MapClaims{}
-	rfClaims["refresh_uuid"] = td.RefreshUuid
-	rfClaims["exp"] = td.RtExp
-	rfClaims["user_id"] = userId
-
-	ft := jwt.NewWithClaims(jwt.SigningMethodHS256, rfClaims)
-	td.RefreshToken, err = ft.SignedString([]byte(os.Getenv("REFRESH_SECRET")))
+	//Creating Refresh Token
+	rClaims := &types.Claim{
+		Username: username,
+		UserId:   userId,
+		StandardClaims: jwt.StandardClaims{
+			// In JWT, the expiry time is expressed as unix milliseconds
+			ExpiresAt: td.RtExp,
+		},
+	}
+	rt := jwt.NewWithClaims(jwt.SigningMethodHS256, rClaims)
+	td.RefreshToken, err = rt.SignedString([]byte(os.Getenv("REFRESH_SECRET")))
 	if err != nil {
 		return nil, err
 	}
@@ -146,148 +236,24 @@ func CreateToken(userId uint64, r *http.Request) (*types.TokenDetails, error) {
 
 }
 
-func saveToken(userId uint64, td *types.TokenDetails) error {
-	var client *redis.Client
+func verifyToken(w http.ResponseWriter, r *http.Request) (*types.Claim, error) {
+	tknString := TokenString
 
-	dsn := os.Getenv("REDIS_PORT")
-	if len(dsn) == 0 {
-		dsn = "localhost:6379"
-	}
-	client = redis.NewClient(&redis.Options{
-		Addr: dsn, //redis port
-	})
-	res, err := client.Ping().Result()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(res)
-	at := time.Unix(td.AtExp, 0) //converting Unix to UTC(to Time object)
-	rt := time.Unix(td.RtExp, 0)
-	now := time.Now()
+	clm := &types.Claim{}
 
-	errAccess := client.Set(td.AccessUuid, strconv.Itoa(int(userId)), at.Sub(now)).Err()
-	if errAccess != nil {
-		return errAccess
-	}
-	errRefresh := client.Set(td.RefreshUuid, strconv.Itoa(int(userId)), rt.Sub(now)).Err()
-	if errRefresh != nil {
-		return errRefresh
-	}
-	fmt.Println("Access uuid: ", td.AccessUuid, "and", "refresh uuid:", td.RefreshUuid)
-	return nil
-
-}
-
-func ExtractToken(r *http.Request) string {
-	bearToken := r.Header.Get("Authorization")
-	tokenString := strings.Split(bearToken, ".")
-	fmt.Println("Bear Token", bearToken)
-
-	if len(tokenString) == 2 {
-		return tokenString[1]
-	}
-	return ""
-}
-
-// 	if len(tokenString) >= 2 {
-// 		return tokenString[1]
-// 	}
-// 	return ""
-// }
-
-func VerifyToken(r *http.Request) (*jwt.Token, error) {
-	var err error
-	exToken := ExtractToken(r)
-	token, err := jwt.Parse(exToken, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("Invalid method specified %v", token.Header["alg"])
-		}
+	tkn, err := jwt.ParseWithClaims(tknString, clm, func(token *jwt.Token) (interface{}, error) {
 		return []byte(os.Getenv("ACCESS_SECRET")), nil
 	})
+
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("An error %v", err))
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil, err
 	}
 
-	return token, nil
+	if !tkn.Valid {
+		w.WriteHeader(http.StatusBadRequest)
+
+	}
+	return clm, nil
 
 }
-
-// func ValidateToken(r *http.Request) error {
-// 	vToken, err := VerifyToken(r)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	fmt.Println("vToken", vToken)
-// 	return nil
-
-// }
-
-// func ValidateToken(r *http.Request) error {
-// 	token, err := VerifyToken(r)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	if _, ok := token.Claims.(jwt.Claims); !ok && !token.Valid {
-// 		return err
-// 	}
-// 	return nil
-// }
-
-// //No1 to call
-
-// func ExtractTokenMetaData(r *http.Request) (*types.AccessDetails, error) {
-// 	var accessUuid string
-// 	var err error
-// 	var token *jwt.Token
-// 	var c *types.AccessDetails
-
-// 	token, err = VerifyToken(r)
-// 	fmt.Println("New Token", token)
-
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	claims, ok := token.Claims.(jwt.MapClaims)
-// 	fmt.Println(claims)
-
-// 	if ok && token.Valid {
-// 		accessUuid, ok = claims["access_uuid"].(string)
-
-// 		if !ok {
-// 			return nil, err
-// 		}
-// 		userId, err := strconv.ParseUint(fmt.Sprintf("%.f", claims["user_id"]), 10, 64)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		c = &types.AccessDetails{
-// 			AccessUuid: accessUuid,
-// 			UserId:     userId,
-// 		}
-// 		return c, nil
-// 	}
-
-// 	return nil, err
-
-// }
-
-// //No2 to call
-
-// func FetchAuth(auth *types.AccessDetails) (uint64, error) {
-// 	// var r *redis.Client
-// 	// var cli storage.RedisClient
-// 	// cli = storage.NewRedisClient(r, os.Getenv("ACCESS_SECRET"))
-// 	dsn := os.Getenv("ACCESS_SECRET")
-// 	cli := redis.NewClient(&redis.Options{
-// 		Addr: dsn, //redis port
-// 	})
-
-// 	userid, err := cli.Get(auth.AccessUuid).Result()
-// 	if err != nil {
-// 		return 0, nil
-// 	}
-// 	userId, _ := strconv.ParseUint(userid, 10, 64)
-
-// 	return userId, nil
-// }

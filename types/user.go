@@ -8,4 +8,5 @@ type User struct {
 	Password string `gorm:"password" json:"password,omitempty"`
 	Gender   string `gorm:"gender" json:"gender"`
 	Location string `gorm:"location"  json:"location,omitempty"`
+	Posts    []Post
 }
