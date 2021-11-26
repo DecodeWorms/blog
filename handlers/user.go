@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type UserHandler struct {
@@ -41,22 +42,25 @@ func (u UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	util.SetHeader(w)
 	var data types.User
 	var err error
-
 	err = json.NewDecoder(r.Body).Decode(&data)
 	if err != nil {
-		json.NewEncoder(w).Encode("Unable to decode json or json is empty")
+		json.NewEncoder(w).Encode("Unable to decode JSON")
 	}
-	json.NewEncoder(w).Encode("Fectching json results..")
-	err = u.user.Create(data)
-	json.NewEncoder(w).Encode("User Created")
 
+	err = u.user.Create(data)
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to save data")
+	}
+	json.NewEncoder(w).Encode("Resources are created successfully")
 }
 
 func (u UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	util.SetHeader(w)
 	var data types.User
+	var d types.User
 	var err error
+
 	err = json.NewDecoder(r.Body).Decode(&data)
 	if err != nil {
 		json.NewEncoder(w).Encode("Unable to decode json")
@@ -64,10 +68,14 @@ func (u UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode("Decoding json..")
 
-	err = u.user.Login(data)
-
+	d, err = u.user.Login(data)
 	if err != nil {
 		json.NewEncoder(w).Encode("username or password incorrect")
+		return
+	}
+	err = bcrypt.CompareHashAndPassword([]byte(d.Password), []byte(data.Password))
+	if err != nil {
+		json.NewEncoder(w).Encode("Unable to hash password")
 		return
 	}
 
@@ -244,9 +252,9 @@ func createToken(username string, userId uint, w http.ResponseWriter) (*types.To
 }
 
 func verifyToken(w http.ResponseWriter, r *http.Request) (*types.Claim, error) {
-	c, err := r.Cookie("token") //this code is not generating a token stored in the cookie
-	tk := c.Value               //nil,so it creates a panic
-	fmt.Println(tk)
+	// c, err := r.Cookie("token") //this code is not generating a token stored in the cookie
+	// tk := c.Value               //nil,so it creates a panic
+	// fmt.Println(tk)
 
 	tknString := TokenString //token generatd is store here to proceed with authentication
 

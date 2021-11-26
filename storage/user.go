@@ -2,6 +2,8 @@ package storage
 
 import (
 	"blog/types"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type User struct {
@@ -28,14 +30,10 @@ func (use User) Automigrate(data types.User) error {
 	return use.c.Client.AutoMigrate(&data)
 }
 
-func (use User) Create(data types.User) error {
+func (use User) Login(data types.User) (types.User, error) {
+	var p types.User
+	return p, use.c.Client.Select("password").First(&p, "username = ?", data.Username).Error
 
-	return use.c.Client.Create(&data).Error
-}
-
-func (use User) Login(data types.User) error {
-
-	return use.c.Client.First(&data, "username = ? AND password = ?", data.Username, data.Password).Error
 }
 
 func (use User) MyProfiles(username string) ([]types.User, error) {
@@ -72,4 +70,18 @@ func (user User) Coment(username string, data types.Comment) error {
 		Comment:  data.Comment,
 	}
 	return user.c.Client.Create(&cmt).Error
+}
+
+func (use User) Create(data types.User) error {
+	pass, _ := bcrypt.GenerateFromPassword([]byte(data.Password), 14)
+	password := string(pass)
+
+	user := types.User{
+		Username: data.Username,
+		Password: password,
+		Gender:   data.Gender,
+		Location: data.Location,
+		Posts:    data.Posts,
+	}
+	return use.c.Client.Create(&user).Error
 }
