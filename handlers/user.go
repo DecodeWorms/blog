@@ -30,8 +30,8 @@ func NewUserHandler(use storage.User) UserHandler {
 
 }
 
-var TokenString string
-var newToken string
+// var TokenString string
+// var newToken string
 
 func (u UserHandler) AutoMigrate(w http.ResponseWriter, r *http.Request) {
 	var err error
@@ -71,12 +71,10 @@ func (u UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var d types.User
 	var err error
 
-	err = json.NewDecoder(r.Body).Decode(&data)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to decode json")
-		return
-	}
-	json.NewEncoder(w).Encode("Decoding json..")
+	_ = json.NewDecoder(r.Body).Decode(&data)
+	res := &types.TokenDetails{}
+	res, err = createToken(data.Username, data.ID, w)
+	SetCookie(w, r, res.AccessToken)
 
 	d, err = u.user.Login(data)
 	if err != nil {
@@ -88,20 +86,6 @@ func (u UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode("Unable to hash password")
 		return
 	}
-
-	res := &types.TokenDetails{}
-	res, err = createToken(data.Username, data.ID, w)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to create token string")
-	}
-	TokenString = res.AccessToken
-	//This http.SetCookie is not working and cookie is not set at the client(browser)
-	http.SetCookie(w, &http.Cookie{
-		Name:    "token",
-		Value:   res.AccessToken,
-		Expires: res.AtExp,
-	})
-	json.NewEncoder(w).Encode(TokenString)
 }
 
 func (u UserHandler) MyProfiles(w http.ResponseWriter, r *http.Request) {
@@ -216,8 +200,15 @@ func (u UserHandler) Comment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u UserHandler) LogOut(w http.ResponseWriter, r *http.Request) {
+	var t types.TokenDetails
 	util.SetHeader(w)
-	TokenString = "deleted"
+	cookie := &http.Cookie{
+		Name:   "token",
+		Value:  t.AccessToken,
+		MaxAge: 0,
+	}
+
+	http.SetCookie(w, cookie)
 	json.NewEncoder(w).Encode("You are logged out..see u next time")
 
 }
@@ -261,16 +252,23 @@ func createToken(username string, userId uint, w http.ResponseWriter) (*types.To
 
 }
 
-func verifyToken(w http.ResponseWriter, r *http.Request) (*types.Claim, error) {
-	// c, err := r.Cookie("token") //this code is not generating a token stored in the cookie
-	// tk := c.Value               //nil,so it creates a panic
-	// fmt.Println(tk)
+func SetCookie(w http.ResponseWriter, r *http.Request, n string) {
+	var t types.TokenDetails
+	cookie := &http.Cookie{
+		Name:   "token",
+		Value:  n,
+		MaxAge: int(t.AtExp.Unix()),
+	}
+	http.SetCookie(w, cookie)
+}
 
-	tknString := TokenString //token generatd is store here to proceed with authentication
+func verifyToken(w http.ResponseWriter, r *http.Request) (*types.Claim, error) {
+	c, err := r.Cookie("token")
+	tk := c.Value
 
 	clm := &types.Claim{}
 
-	tkn, err := jwt.ParseWithClaims(tknString, clm, func(token *jwt.Token) (interface{}, error) {
+	tkn, err := jwt.ParseWithClaims(tk, clm, func(token *jwt.Token) (interface{}, error) {
 		return []byte(os.Getenv("ACCESS_SECRET")), nil
 	})
 
@@ -292,7 +290,7 @@ func Translator(data types.User, w http.ResponseWriter) validator.FieldError {
 	uni := ut.New(translator, translator)
 	trans, found := uni.GetTranslator("en")
 	if !found {
-		log.Fatal("Translator not fiund")
+		log.Fatal("Translator not found")
 	}
 
 	v := validator.New()
