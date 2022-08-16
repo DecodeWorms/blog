@@ -1,87 +1,108 @@
 package storage
 
 import (
-	"blog/types"
-
-	"golang.org/x/crypto/bcrypt"
+	"blog/models"
+	"context"
+	"time"
 )
+
+type UserServices interface {
+	Automigrate() error
+	Create(ctx context.Context, input models.UserInput) error
+	CreateAddress(ctx context.Context, input models.AddressInput) error
+	StoreOtherUserData(ctx context.Context, input models.MoreInfo) error
+	Address(ctx context.Context, userId uint) (*models.Address, error)
+	UserById(ctx context.Context, id string) (*models.User, error)
+	UserByEmail(ctx context.Context, email string) (*models.User, error)
+	UserByPhoneNumber(ctx context.Context, phoneNumber string) (*models.User, error)
+	UpdateUserById(ctx context.Context, id string, data models.User) error
+	DeleteUserById(ctx context.Context, id string) error
+}
 
 type User struct {
 	c *Conn
 }
 
-func NewUser(c *Conn) User {
+func NewUser(ctx context.Context, c *Conn) User {
 	return User{
 		c: c,
 	}
 
 }
 
-type Result struct {
-	Username string
-	Gender   string
-	Location string
-	Title    string
-	Body     string
-	Image    string
-}
-
-func (use User) Automigrate(data types.User) error {
-	return use.c.Client.AutoMigrate(&data)
-}
-
-func (use User) Login(data types.User) (types.User, error) {
-	var p types.User
-	return p, use.c.Client.Select("password").First(&p, "username = ?", data.Username).Error
+func (u User) Automigrate() error {
+	var data models.User
+	return u.c.Client.AutoMigrate(&data)
 
 }
 
-func (use User) MyProfiles(username string) ([]types.User, error) {
-	var u []types.User
-	//return u, use.c.Client.First(&u, "username = ?", username).Error
-	//return u, use.c.Client.Model(types.User{}).Select("users.username,users.gender,users.location,posts.title,posts.body,posts.image").Joins("left join posts on posts.user_id = users.id").Where("users.username = ?", username).Scan(&u).Error
-	return u, use.c.Client.Preload("Posts").Find(&u, "username = ?", username).Error
-}
+func (u User) Create(ctx context.Context, input models.UserInput) error {
+	var da models.User
 
-func (use User) Posts() ([]types.Post, error) {
-	var d []types.Post
-	return d, use.c.Client.Preload("Comments").Find(&d).Error
-}
+	da.CreatedAt, da.UpdatedAt = time.Now(), time.Now()
 
-func (user User) UpdateName(username string, data types.User) error {
-	return user.c.Client.Model(&types.User{}).Where("username = ?", username).Update("username", data.Username).Error
-}
-
-func (user User) Post(userId uint64, data types.Post) error {
-	post := types.Post{
-		UserId: uint64(userId),
-		Title:  data.Title,
-		Body:   data.Body,
-		Image:  data.Image,
+	d := &models.User{
+		Username:    input.Username,
+		Email:       input.Email,
+		Password:    input.Password,
+		Gender:      input.Gender,
+		PhoneNumber: input.PhoneNumber,
 	}
-
-	return user.c.Client.Create(&post).Error
+	return u.c.Client.Create(&d).Error
 }
 
-func (user User) Coment(username string, data types.Comment) error {
-	cmt := types.Comment{
-		Username: username,
-		PostId:   uint64(data.PostId),
-		Comment:  data.Comment,
-	}
-	return user.c.Client.Create(&cmt).Error
+func (u User) StoreOtherUserData(ctx context.Context, input models.MoreInfo) error {
+	var d models.User
+	d.UpdatedAt = time.Now()
+
+	return u.c.Client.Model(&models.User{}).Where("id = ?", input.UserId).Updates(models.User{
+		MaritalStatus: input.MaritalStatus,
+		Age:           input.Age,
+		Title:         input.Title,
+	}).Error
+
 }
 
-func (use User) Create(data types.User) error {
-	pass, _ := bcrypt.GenerateFromPassword([]byte(data.Password), 14)
-	password := string(pass)
-
-	user := types.User{
-		Username: data.Username,
-		Password: password,
-		Gender:   data.Gender,
-		Location: data.Location,
-		Posts:    data.Posts,
+func (u User) CreateAddress(ctx context.Context, input models.AddressInput) error {
+	data := &models.Address{
+		UserId:     input.UserId,
+		State:      input.State,
+		LGA:        input.LGA,
+		PostalCode: input.PostalCode,
 	}
-	return use.c.Client.Create(&user).Error
+	return u.c.Client.Create(data).Error
+}
+
+func (u User) Address(ctx context.Context, userId uint) (*models.Address, error) {
+	var add *models.Address
+
+	return add, u.c.Client.Where("user_id = ?", userId).First(&add).Error
+}
+
+func (u User) UserByEmail(ctx context.Context, email string) (*models.User, error) {
+	var m models.User
+	if err := u.c.Client.Where("email = ?", email).First(&m).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (u User) UserByPhoneNumber(ctx context.Context, phoneNumber string) (*models.User, error) {
+	var us models.User
+	return &us, u.c.Client.Where("phone_number = ?", phoneNumber).First(&us).Error
+
+}
+
+func (u User) UserById(ctx context.Context, id string) (*models.User, error) {
+	var m models.User
+	return &m, u.c.Client.Where("id = ?", id).First(&m).Error
+
+}
+
+func (u User) UpdateUserById(ctx context.Context, id string, data models.User) error {
+	return nil
+}
+
+func (u User) DeleteUserById(ctx context.Context, id string) error {
+	return nil
 }

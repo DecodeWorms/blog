@@ -1,17 +1,20 @@
 package storage
 
-import "blog/types"
+import (
+	models "blog/models"
+	"context"
+)
 
 type Comment struct {
 	c *Conn
 }
 
-func NewComment(c *Conn) Comment {
+func NewComment(context context.Context, c *Conn) Comment {
 	return Comment{
 		c: c,
 	}
 }
 
-func (c Comment) Table(data types.Comment) error {
+func (c Comment) Table(data models.Comment) error {
 	return c.c.Client.AutoMigrate(&data)
 }

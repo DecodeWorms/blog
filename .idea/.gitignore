@@ -1,3 +1,4 @@
+//.ignore
 # Default ignored files
 /shelf/
 /workspace.xml
@@ -7,4 +8,31 @@
 # Editor-based HTTP Client requests
 /httpRequests/
 
+//blog.iml
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="WEB_MODULE" version="4">
+  <component name="Go" enabled="true" />
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$" />
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>
 
+//modules.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/user_credit_card.iml" filepath="$PROJECT_DIR$/.idea/blog.iml" />
+    </modules>
+  </component>
+</project>
+
+//vcs.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="$PROJECT_DIR$" vcs="Git" />
+  </component>
+</project>

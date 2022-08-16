@@ -3,12 +3,12 @@ package main
 import (
 	"blog/config"
 	"blog/handlers"
+	"blog/middleware"
+	"blog/server"
 	"blog/storage"
-	"log"
-	"net/http"
 	"os"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"gorm.io/gorm"
 )
@@ -18,9 +18,13 @@ var user storage.User
 var post storage.Post
 var comment storage.Comment
 
-var r *storage.RedisClient
+var userServer server.UserServer
 
-var u handlers.UserHandler
+var userhandler handlers.UserHandler
+
+// var r *storage.RedisClient
+
+// var u handlers.UserHandler
 
 func init() {
 	_ = godotenv.Load()
@@ -38,34 +42,33 @@ func init() {
 	}
 	//conection to DB
 	c = storage.NewConn(cfg, db)
-	user = storage.NewUser(c)
-	post = storage.NewPost(c)
-	comment = storage.NewComment(c)
+
+	//services layer
+	initContext := &gin.Context{}
+	user = storage.NewUser(initContext, c)
+	post = storage.NewPost(initContext, c)
+	comment = storage.NewComment(initContext, c)
+
+	//handler layer
+	userhandler = handlers.NewUserHandler(user)
+
+	//server layer
+	userServer = server.NewUserServer(userhandler)
 
 }
 func main() {
+	router := gin.Default()
+	router.POST("/user/table", userServer.AutoMigrate())
+	router.POST("/user/create", userServer.Signup())
+	router.POST("/user/login", userServer.Login())
 
-	u := handlers.NewUserHandler(user)
-	p := handlers.NewPostHandler(post)
-	c := handlers.NewCommentHandler(comment)
-	router := mux.NewRouter()
-	//router.HandleFunc("/user/create", u.Create).Methods("POST")
-	router.HandleFunc("/user/create", u.Create).Methods("POST")
-	router.HandleFunc("/user/auto", u.AutoMigrate).Methods("POST")
-	router.HandleFunc("/user/login", u.Login).Methods("POST")
-	//router.HandleFunc("/user/log", u.Log).Methods("POST")
-	router.HandleFunc("/user/myprofile", u.MyProfiles).Methods("GET")
-	router.HandleFunc("/user/posts", u.Posts).Methods("GET")
-	//router.HandleFunc("/user/pass", u.Pass).Methods("GET")
-	router.HandleFunc("/user/update", u.UpdateName).Methods("PUT")
-	router.HandleFunc("/user/posts", u.Post).Methods("POST")
-	router.HandleFunc("/user/comment", u.Comment).Methods("POST")
-	router.HandleFunc("/user/logout", u.LogOut).Methods("POST")
-	// router.HandleFunc("/user/logout", u.LogOut).Methods("POST")
-
-	router.HandleFunc("/post/table", p.Table).Methods("POST")
-
-	router.HandleFunc("/comment/table", c.Table).Methods("POST")
-	log.Fatal(http.ListenAndServe(":8000", router))
+	//Middleware validates if incoming http request has valid token
+	secured := router.Group("/user").Use(middleware.ValidateToken)
+	{
+		secured.GET("/details", userServer.UserDetails())
+		secured.PUT("/kyc", userServer.StoreOtherUserData())
+		secured.GET("detail2", userServer.UserById())
+	}
+	router.Run(":3000")
 
 }

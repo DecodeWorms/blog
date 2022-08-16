@@ -1,345 +1,245 @@
 package handlers
 
 import (
+	"blog/auth"
+	"blog/errhandler"
+	"blog/models"
+	"blog/pkg"
 	"blog/storage"
-	"blog/types"
 	"blog/util"
-	"encoding/json"
+	"context"
+	"errors"
 	"fmt"
-	"log"
-	"net/http"
-	"os"
-	"time"
 
-	"github.com/dgrijalva/jwt-go"
-	"github.com/go-playground/locales/en"
-	ut "github.com/go-playground/universal-translator"
-	"golang.org/x/crypto/bcrypt"
-	"gopkg.in/go-playground/validator.v9"
-	en_translations "gopkg.in/go-playground/validator.v9/translations/en"
+	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 )
 
 type UserHandler struct {
-	user storage.User
+	userService storage.UserServices
 }
 
-func NewUserHandler(use storage.User) UserHandler {
+func NewUserHandler(use storage.UserServices) UserHandler {
 	return UserHandler{
-		user: use,
+		userService: use,
 	}
 
 }
 
-// var TokenString string
-// var newToken string
-
-func (u UserHandler) AutoMigrate(w http.ResponseWriter, r *http.Request) {
-	var err error
-	var data types.User
-	err = u.user.Automigrate(data)
+func (u UserHandler) AutoMigrate() error {
+	err := u.userService.Automigrate()
 	if err != nil {
-		json.NewEncoder(w).Encode("Unable to create users table")
+		return errors.New("unable to migrate a table")
 	}
-	json.NewEncoder(w).Encode("Users table created successfully...")
-}
-
-func (u UserHandler) Create(w http.ResponseWriter, r *http.Request) {
-	util.SetHeader(w)
-	var data types.User
-	var err error
-	err = json.NewDecoder(r.Body).Decode(&data)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to decode JSON")
-	}
-
-	e := Translator(data, w)
-	if e != nil {
-		return
-	}
-
-	err = u.user.Create(data)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to save data")
-	}
-	json.NewEncoder(w).Encode("Resources are created successfully")
-}
-
-func (u UserHandler) Login(w http.ResponseWriter, r *http.Request) {
-
-	util.SetHeader(w)
-	var data types.User
-	var d types.User
-	var err error
-
-	_ = json.NewDecoder(r.Body).Decode(&data)
-	res := &types.TokenDetails{}
-	res, err = createToken(data.Username, data.ID, w)
-	SetCookie(w, r, res.AccessToken)
-
-	d, err = u.user.Login(data)
-	if err != nil {
-		json.NewEncoder(w).Encode("username or password incorrect")
-		return
-	}
-	err = bcrypt.CompareHashAndPassword([]byte(d.Password), []byte(data.Password))
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to hash password")
-		return
-	}
-}
-
-func (u UserHandler) MyProfiles(w http.ResponseWriter, r *http.Request) {
-	util.SetHeader(w)
-	var err error
-
-	var claims *types.Claim
-	claims, err = verifyToken(w, r)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
-		return
-	}
-	w.Write([]byte(fmt.Sprintf("Welcome %s!", claims.Username)))
-	var data []types.User
-	data, err = u.user.MyProfiles(claims.Username)
-	json.NewEncoder(w).Encode(data)
+	return nil
 
 }
 
-func (u UserHandler) Posts(w http.ResponseWriter, r *http.Request) {
-	util.SetHeader(w)
-	var err error
-	var data []types.Post
-	var claims *types.Claim
-	claims, err = verifyToken(w, r)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
-		return
+func (u UserHandler) Signup(ctx context.Context, data models.UserInput) *errhandler.UserError {
+	//validate if the user already exists
+	_, err := u.userService.UserByEmail(ctx, data.Email)
+	if err == nil {
+		return errhandler.EmailAlreadyExist
 	}
-	w.Write([]byte(fmt.Sprintf("Welcome %s!", claims.Username)))
-	data, err = u.user.Posts()
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to load posts")
+	_, err = u.userService.UserByPhoneNumber(ctx, data.PhoneNumber)
+	if err == nil {
+		return errhandler.PhoneNumberAlreadyExist
 	}
-	json.NewEncoder(w).Encode(data)
+	if b := pkg.ValidateGender(data.Gender); !b {
+		return errhandler.GenderNotMatched
+	}
+
+	//validate user datas before persisting it to the DB..
+	val := pkg.InitValidator{Validate: pkg.NewInitValidator()}
+	valErr := ValidateUserData(val, data)
+	return errhandler.NewUserError(500, valErr)
+
+	// hash password
+	password, err := pkg.HashPassword(data.Password)
+	if err != nil {
+		return errhandler.IncorrectPassword
+	}
+
+	d := models.UserInput{
+		Username:    data.Username,
+		Email:       data.Email,
+		Password:    password,
+		Gender:      data.Gender,
+		PhoneNumber: data.PhoneNumber,
+	}
+
+	if crErr := u.userService.Create(ctx, d); crErr != nil {
+		return errhandler.UnableToCeateUser
+	}
+	return nil
 
 }
 
-func (u UserHandler) UpdateName(w http.ResponseWriter, r *http.Request) {
-	util.SetHeader(w)
-	var err error
-	var data types.User
-	err = json.NewDecoder(r.Body).Decode(&data)
+func (u UserHandler) StoreOtherUserData(ctx *gin.Context, data models.StoreOtherUserDataInput) error {
+	userId := fmt.Sprintf("%v", util.GetUserIdFromContext(ctx))
+	fmt.Println("userId is", userId)
+	user, err := u.userService.UserById(ctx, userId)
 	if err != nil {
-		json.NewEncoder(w).Encode("Unable to marshal json")
-		return
+		return err
 	}
-	var clm *types.Claim
-	clm, err = verifyToken(w, r)
+
+	val := pkg.InitValidator{Validate: pkg.NewInitValidator()}
+	if valErr := ValidateStoreOtherUserData(val, data.PersonalInfo); valErr != nil {
+		return fmt.Errorf("validation err : %v", valErr)
+	}
+
+	val = pkg.InitValidator{Validate: pkg.NewInitValidator()}
+	if verr := ValidateAddress(val, data.Address); verr != nil {
+		return fmt.Errorf("validation err : %v", verr)
+	}
+
+	us := models.MoreInfo{
+		UserId:        user.ID,
+		MaritalStatus: data.PersonalInfo.MaritalStatus,
+		Age:           data.PersonalInfo.Age,
+		Title:         data.PersonalInfo.Title,
+	}
+
+	err = u.userService.StoreOtherUserData(ctx, us)
 	if err != nil {
-		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
-		return
+		return err
 	}
-	w.Write([]byte(fmt.Sprintf("Welcome %s!", clm.Username)))
-	err = u.user.UpdateName(clm.Username, data)
+
+	add := models.AddressInput{
+		UserId:     user.ID,
+		State:      data.Address.State,
+		LGA:        data.Address.LGA,
+		PostalCode: data.Address.PostalCode,
+	}
+
+	err = u.userService.CreateAddress(ctx, add)
 	if err != nil {
-		json.NewEncoder(w).Encode("Unable to update user profile")
-		return
+		return err
 	}
-	json.NewEncoder(w).Encode("Username Changed successfully")
+
+	return nil
 
 }
 
-func (u UserHandler) Post(w http.ResponseWriter, r *http.Request) {
-	var err error
-	var clm *types.Claim
-	clm, err = verifyToken(w, r)
+func (u UserHandler) Login(ctx context.Context, data models.Login) (*models.LoginResponse, *errhandler.UserError) {
+	//validate if the user already exists
+	user, err := u.userService.UserByEmail(ctx, data.Email)
 	if err != nil {
-		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
-		return
-	}
-	w.Write([]byte(fmt.Sprintf("Welcome %s!", clm.Username)))
-	fmt.Println(clm.UserId)
-
-	var data types.Post
-	err = json.NewDecoder(r.Body).Decode(&data)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to unmarshal json or empty input")
+		return nil, errhandler.UserRecordNotFound
 	}
 
-	err = u.user.Post(uint64(clm.UserId), data)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to create post..")
+	// validate login datas
+	val := pkg.InitValidator{Validate: pkg.NewInitValidator()}
+	valerr := ValidateLogin(val, data)
+	return nil, errhandler.NewUserError(500, valerr)
+
+	// compare password
+
+	perr := pkg.ComparePassword(user.Password, data.Password)
+	if perr != nil {
+		return nil, errhandler.IncorrectPassword
 	}
-	json.NewEncoder(w).Encode("Post created successfully..")
+
+	//generate token
+	tokenString, err := auth.GenerateJWT(user.Email, user.Username, user.ID)
+	if err != nil {
+		return nil, errhandler.UnableToGenerateToken
+	}
+
+	lgnResponse := &models.LoginResponse{
+		Id:            user.ID,
+		Email:         user.Email,
+		Gender:        user.Gender,
+		PhoneNumber:   user.PhoneNumber,
+		MaritalStatus: user.MaritalStatus,
+		TokenString:   tokenString,
+		Title:         user.Title,
+	}
+	return lgnResponse, nil
 
 }
 
-func (u UserHandler) Comment(w http.ResponseWriter, r *http.Request) {
-	util.SetHeader(w)
-	var err error
-	var clm *types.Claim
-	clm, err = verifyToken(w, r)
+func (u UserHandler) UserDetails(ctx context.Context, email string) (*models.UserDetails, error) {
+	user, err := u.userService.UserByEmail(ctx, email)
 	if err != nil {
-		json.NewEncoder(w).Encode("Unauthorized token or you are being logged out")
-		return
+		return nil, errors.New("user records not found")
 	}
-	w.Write([]byte(fmt.Sprintf("Welcome %s!", clm.Username)))
-
-	var data types.Comment
-	err = json.NewDecoder(r.Body).Decode(&data)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to unmarshal json...")
+	d := &models.UserDetails{
+		Id:       user.ID,
+		Username: user.Username,
+		Email:    user.Email,
+		Gender:   user.Gender,
 	}
-
-	err = u.user.Coment(clm.Username, data)
-	if err != nil {
-		json.NewEncoder(w).Encode("Unable to save ur comment")
-	}
-	json.NewEncoder(w).Encode("Comment saved successfully..")
-
+	return d, nil
 }
 
-func (u UserHandler) LogOut(w http.ResponseWriter, r *http.Request) {
-	var t types.TokenDetails
-	util.SetHeader(w)
-	cookie := &http.Cookie{
-		Name:   "token",
-		Value:  t.AccessToken,
-		MaxAge: 0,
-	}
-
-	http.SetCookie(w, cookie)
-	json.NewEncoder(w).Encode("You are logged out..see u next time")
-
-}
-
-func createToken(username string, userId uint, w http.ResponseWriter) (*types.TokenDetails, error) {
-	td := &types.TokenDetails{}
-	td.AtExp = time.Now().Add(time.Minute * 15)
-
-	td.RtExp = time.Now().Add(time.Hour * 24 * 7).Unix()
-
-	var err error
-	//Creating Access Token
-	atClaims := &types.Claim{
-		Username: username,
-		UserId:   userId,
-		StandardClaims: jwt.StandardClaims{
-			// In JWT, the expiry time is expressed as unix milliseconds
-			ExpiresAt: td.AtExp.Unix(),
-		},
-	}
-	at := jwt.NewWithClaims(jwt.SigningMethodHS256, atClaims)
-	td.AccessToken, err = at.SignedString([]byte(os.Getenv("ACCESS_SECRET")))
+func (u UserHandler) UserById(ctx *gin.Context, id string) (*models.User, error) {
+	user, err := u.userService.UserById(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	//Creating Refresh Token
-	rClaims := &types.Claim{
-		Username: username,
-		UserId:   userId,
-		StandardClaims: jwt.StandardClaims{
-			// In JWT, the expiry time is expressed as unix milliseconds
-			ExpiresAt: td.RtExp,
-		},
-	}
-	rt := jwt.NewWithClaims(jwt.SigningMethodHS256, rClaims)
-	td.RefreshToken, err = rt.SignedString([]byte(os.Getenv("REFRESH_SECRET")))
+	return user, nil
+}
+
+func ValidateUserData(val pkg.InitValidator, data interface{}) []error {
+	mpErr := make([]error, 0)
+
+	err := val.Struct(data)
 	if err != nil {
-		return nil, err
-	}
-	return td, nil
+		for _, value := range err.(validator.ValidationErrors) {
 
+			e := fmt.Errorf("field : %s and kind : %s", value.Field(), value.Kind())
+			mpErr = append(mpErr, e)
+		}
+		return mpErr
+	}
+	return nil
 }
 
-func SetCookie(w http.ResponseWriter, r *http.Request, n string) {
-	var t types.TokenDetails
-	cookie := &http.Cookie{
-		Name:   "token",
-		Value:  n,
-		MaxAge: int(t.AtExp.Unix()),
-	}
-	http.SetCookie(w, cookie)
-}
+func ValidateStoreOtherUserData(val pkg.InitValidator, data interface{}) []error {
+	mpErr := make([]error, 0)
 
-func verifyToken(w http.ResponseWriter, r *http.Request) (*types.Claim, error) {
-	c, err := r.Cookie("token")
-	tk := c.Value
-
-	clm := &types.Claim{}
-
-	tkn, err := jwt.ParseWithClaims(tk, clm, func(token *jwt.Token) (interface{}, error) {
-		return []byte(os.Getenv("ACCESS_SECRET")), nil
-	})
-
+	err := val.Struct(data)
 	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		return nil, err
-	}
+		for _, value := range err.(validator.ValidationErrors) {
 
-	if !tkn.Valid {
-		w.WriteHeader(http.StatusBadRequest)
-
+			e := fmt.Errorf("field : %s and kind : %s", value.Field(), value.Kind())
+			mpErr = append(mpErr, e)
+		}
+		return mpErr
 	}
-	return clm, nil
+	return nil
 
 }
 
-func Translator(data types.User, w http.ResponseWriter) validator.FieldError {
-	translator := en.New()
-	uni := ut.New(translator, translator)
-	trans, found := uni.GetTranslator("en")
-	if !found {
-		log.Fatal("Translator not found")
+func ValidateAddress(val pkg.InitValidator, data interface{}) []error {
+	mpErr := make([]error, 0)
+
+	err := val.Struct(data)
+	if err != nil {
+		for _, value := range err.(validator.ValidationErrors) {
+
+			e := fmt.Errorf("field : %s and kind : %s", value.Field(), value.Kind())
+			mpErr = append(mpErr, e)
+		}
+		return mpErr
 	}
+	return nil
 
-	v := validator.New()
+}
 
-	if err := en_translations.RegisterDefaultTranslations(v, trans); err != nil {
-		log.Fatal(err)
+func ValidateLogin(val pkg.InitValidator, data interface{}) []error {
+	mpErr := make([]error, 0)
+
+	err := val.Struct(data)
+	if err != nil {
+		for _, value := range err.(validator.ValidationErrors) {
+
+			e := fmt.Errorf("field : %s and kind : %s", value.Field(), value.Kind())
+			mpErr = append(mpErr, e)
+		}
+		return mpErr
 	}
-
-	_ = v.RegisterTranslation("required", trans, func(ut ut.Translator) error {
-		return ut.Add("required", "{0} is a required field", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		t, _ := ut.T("required", fe.Field())
-		return t
-	})
-
-	// _ = v.RegisterTranslation("email", trans, func(ut ut.Translator) error {
-	// 	return ut.Add("email", "{0} must be a valid email", true) //
-	// }, func(ut ut.Translator, fe validator.FieldError) string {
-	// 	t, _ := ut.T("email", fe.Field())
-	// 	return t
-	// })
-
-	_ = v.RegisterTranslation("passwd", trans, func(ut ut.Translator) error {
-		return ut.Add("passwd", "{0} is not strong enough", true) // see universal-translator for details
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		t, _ := ut.T("passwd", fe.Field())
-		return t
-	})
-
-	_ = v.RegisterValidation("passwd", func(fl validator.FieldLevel) bool {
-		return len(fl.Field().String()) > 6
-	})
-
-	_ = v.RegisterTranslation("gender", trans, func(ut ut.Translator) error {
-		return ut.Add("gender", "{0} not correct gender", true)
-	}, func(ut ut.Translator, fe validator.FieldError) string {
-		t, _ := ut.T("gender", fe.Field())
-		return t
-	})
-
-	//var err error
-
-	err := v.Struct(data)
-	var errs validator.FieldError
-
-	for _, errs = range err.(validator.ValidationErrors) {
-		json.NewEncoder(w).Encode(errs.Translate(trans))
-		fmt.Println(errs.Translate(trans))
-	}
-	return errs
+	return nil
 
 }
